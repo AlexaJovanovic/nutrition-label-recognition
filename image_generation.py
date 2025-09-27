@@ -14,10 +14,7 @@ def generate_nutrition_data():
         "Calories": random.randint(50, 600),
         "Total Fat": f"{random.uniform(0, 30):.1f}g",
         "Saturated Fat": f"{random.uniform(0, 15):.1f}g",
-        "Trans Fat": f"{random.uniform(0, 2):.1f}g",
-        "Cholesterol": f"{random.randint(0, 100)}mg",
-        "Sodium": f"{random.randint(0, 1500)}mg",
-        "Total Carbohydrate": f"{random.uniform(0, 80):.1f}g",
+        "Carbohydrate": f"{random.uniform(0, 80):.1f}g",
         "Dietary Fiber": f"{random.uniform(0, 15):.1f}g",
         "Sugars": f"{random.uniform(0, 40):.1f}g",
         "Protein": f"{random.uniform(0, 50):.1f}g"
@@ -55,7 +52,7 @@ import cv2
 import numpy as np
 
 # Load image
-img = cv2.imread("labels/nutrition_label_0.png")
+img = cv2.imread("generated_labels/nutrition_label_0.png")
 
 h, w = img.shape[:2]
 
@@ -82,4 +79,4 @@ matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
 warped = cv2.warpPerspective(img, matrix, (w, h))
 
 # Save result
-cv2.imwrite("table_transformed.png", warped)
+cv2.imwrite("generated_labels/table_transformed.png", warped)
