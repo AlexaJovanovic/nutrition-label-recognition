@@ -1,9 +1,9 @@
 nutrient_aliases = {
-    "calories": ["calories", "energie", "energía", "kalorien"],
-    "protein": ["protein", "eiweiß", "proteínas", "protéine"],
-    "carbohydrates": ["carbohydrate", "carbs", "kohlenhydrate", "glucides"],
-    "fat": ["fat", "fett", "grasas", "lipides"],
-    "sugar": ["sugar", "zucker", "azúcares", "sucre"],
+    "calories": ["calories", "energie", "energía", "kalorien", "kalorije", "energetska vrednost", "energija"],
+    "protein": ["protein", "eiweiß", "proteínas", "protéine", "proteini"],
+    "carbohydrates": ["carbohydrate", "carbs", "kohlenhydrate", "glucides", "ugljeni hidrati"],
+    "fat": ["fat", "fett", "grasas", "lipides", "masti"],
+    "sugar": ["sugar", "zucker", "azúcares", "sucre", "secer"],
 }
 
 import unicodedata
