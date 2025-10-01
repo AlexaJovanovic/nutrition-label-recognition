@@ -145,7 +145,7 @@ if __name__ == "__main__":
         perspective_strength=0.2,
         brightness_factor=1.2,
         noise_amount=0.02,
-        gaussian_blur_kernel=5git 
+        gaussian_blur_kernel=5
     )
 
     aug_img = apply_augmentations(img, params)
