@@ -170,7 +170,7 @@ if __name__ == "__main__":
 
     # Apply augmentations
     warped = add_perspective(img)
-    noisy = add_noise(img)
+    noisy = add_noise(img, 0.5)
     brighter = adjust_brightness(img, 0.5)
     blurred = apply_blur(img, 3)
     blurred2 = apply_blur(img, 7)
