@@ -13,16 +13,32 @@ class NutritionLabelGenerator:
 
     @staticmethod
     def generate_nutrition_data():
-        """Generate a dictionary with random nutrition values."""
+        """Generate a dictionary with realistic random nutrition values."""
+
+        # Macronutrients in grams
+        protein = round(random.uniform(0, 50), 1)
+        fat = round(random.uniform(0, 30), 1)
+        carbs = round(random.uniform(0, 80), 1)
+
+        # Calories calculated exactly
+        calories = int(round(4 * (protein + carbs) + 9 * fat))
+
+        # Sugars + fiber <= carbs
+        fiber = round(random.uniform(0, min(15, carbs)), 1)
+        sugars = round(random.uniform(0, max(0, carbs - fiber)), 1)
+
+        # Saturated fat ≤ total fat
+        sat_fat = round(random.uniform(0, fat), 1)
+
         return {
             "Serving Size": f"{random.randint(20, 200)}g",
-            "Calories": random.randint(50, 600),
-            "Total Fat": f"{random.uniform(0, 30):.1f}g",
-            "Saturated Fat": f"{random.uniform(0, 15):.1f}g",
-            "Carbohydrate": f"{random.uniform(0, 80):.1f}g",
-            "Dietary Fiber": f"{random.uniform(0, 15):.1f}g",
-            "Sugars": f"{random.uniform(0, 40):.1f}g",
-            "Protein": f"{random.uniform(0, 50):.1f}g"
+            "Calories": calories,
+            "Total Fat": f"{fat}g",
+            "Saturated Fat": f"{sat_fat}g",
+            "Carbohydrate": f"{carbs}g",
+            "Dietary Fiber": f"{fiber}g",
+            "Sugars": f"{sugars}g",
+            "Protein": f"{protein}g"
         }
 
     def generate_image(self, data, filename="nutrition_label.png", 
