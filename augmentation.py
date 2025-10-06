@@ -13,6 +13,37 @@ class AugmentationParams:
     noise_amount: Optional[float] = None          # 0.0–1.0
     gaussian_blur_kernel: Optional[int] = None    # odd int (3,5,…)
 
+    @staticmethod
+    def random(
+        enable_prob: float = 0.6,
+        rotation_range: tuple[float, float] = (-30, 30),
+        scale_range: tuple[float, float] = (0.4, 1),
+        perspective_range: tuple[float, float] = (0.1, 0.4),
+        brightness_range: tuple[float, float] = (0.5, 1.3),
+        noise_range: tuple[float, float] = (0.05, 0.4),
+        blur_kernels: tuple[int, ...] = (5, 7, 9),
+    ) -> "AugmentationParams":
+        """
+        Generate a random set of augmentation parameters.
+        Each augmentation has a chance `enable_prob` to be active.
+        """
+        def maybe(value_func):
+            return value_func() if random.random() < enable_prob else None
+
+        return AugmentationParams(
+            rotate_angle=maybe(lambda: round(random.uniform(*rotation_range), 1)),
+            scale_factor=maybe(lambda: round(random.uniform(*scale_range), 2)),
+            perspective_strength=maybe(lambda: round(random.uniform(*perspective_range), 2)),
+            brightness_factor=maybe(lambda: round(random.uniform(*brightness_range), 2)),
+            noise_amount=maybe(lambda: round(random.uniform(*noise_range), 3)),
+            gaussian_blur_kernel=maybe(lambda: random.choice(blur_kernels)),
+        )
+
+    def __str__(self) -> str:
+        """Readable string for quick debugging."""
+        fields = [f"{k}={v}" for k, v in self.__dict__.items() if v is not None]
+        return f"AugmentationParams({', '.join(fields)})"
+
 # --------------------------
 # Augmentation Functions
 # --------------------------

@@ -4,7 +4,7 @@ import numpy as np
 from regex_matching import *
 
 path = r'./generated_labels/'
-img_name = "nutrition_label_0.png"
+img_name = "label_0002.png"
 
 reader = easyocr.Reader(['en'], gpu=False)
 

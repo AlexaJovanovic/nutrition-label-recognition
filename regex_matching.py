@@ -1,17 +1,17 @@
 nutrient_aliases = {
-    "calories": ["calories", "energie", "energía", "kalorien", "kalorije", "energetska vrednost", "energija"],
-    "protein": ["protein", "eiweiß", "proteínas", "protéine", "proteini"],
-    "carbohydrates": ["carbohydrate", "carbs", "kohlenhydrate", "glucides", "ugljeni hidrati"],
+    "calories": ["calories", "energie", "energía", "kalorien", "kalorije", "energetska vrednost", "energija", "енергетска вредност"],
+    "protein": ["protein", "eiweiß", "proteínas", "protéine", "proteini", "протеини"],
+    "carbohydrates": ["carbohydrate", "carbs", "kohlenhydrate", "glucides", "ugljeni hidrati", "угљени хидрати"],
     "fat": ["fat", "fett", "grasas", "lipides", "masti"],
-    "sugar": ["sugar", "zucker", "azúcares", "sucre", "secer"],
+    "sugar": ["sugar", "zucker", "azúcares", "sucre", "sećeri", "шећери"],
 }
 
 import unicodedata
 
 def normalize(text):
     text = text.lower()
-    text = unicodedata.normalize("NFD", text)
-    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    #text = unicodedata.normalize("NFD", text)
+    #text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
     return text
 
 

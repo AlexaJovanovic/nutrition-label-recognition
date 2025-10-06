@@ -4,7 +4,8 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-
+from nutrition_label import NutritionLabel
+from augmentation import *
 
 class NutritionLabelGenerator:
     def __init__(self, output_dir="generated_labels"):
@@ -15,10 +16,15 @@ class NutritionLabelGenerator:
     def generate_nutrition_data():
         """Generate a dictionary with realistic random nutrition values."""
 
-        # Macronutrients in grams
-        protein = round(random.uniform(0, 50), 1)
-        fat = round(random.uniform(0, 30), 1)
-        carbs = round(random.uniform(0, 80), 1)
+        # Step 1: total macros between 10–90 g
+        total_macros = random.uniform(10, 90)
+
+        # Step 2: random split into protein, fat, carbs
+        parts = [random.random() for _ in range(3)]
+        total_parts = sum(parts)
+        protein = round(total_macros * parts[0] / total_parts, 1)
+        fat     = round(total_macros * parts[1] / total_parts, 1)
+        carbs   = round(total_macros * parts[2] / total_parts, 1)
 
         # Calories calculated exactly
         calories = int(round(4 * (protein + carbs) + 9 * fat))
@@ -30,22 +36,37 @@ class NutritionLabelGenerator:
         # Saturated fat ≤ total fat
         sat_fat = round(random.uniform(0, fat), 1)
 
-        return {
-            "Serving Size": f"{random.randint(20, 200)}g",
-            "Calories": calories,
-            "Total Fat": f"{fat}g",
-            "Saturated Fat": f"{sat_fat}g",
-            "Carbohydrate": f"{carbs}g",
-            "Dietary Fiber": f"{fiber}g",
-            "Sugars": f"{sugars}g",
-            "Protein": f"{protein}g"
-        }
+        return NutritionLabel(
+            calories=calories,
+            total_fat=fat,
+            saturated_fat=sat_fat,
+            carbohydrate=carbs,
+            dietary_fiber=fiber,
+            sugars=sugars,
+            protein=protein,
+        )
 
-    def generate_image(self, data, filename="nutrition_label.png", 
-                    bg_color="#ffffff", header_color="#cccccc", stripe=True):
+    def generate_image(
+        self,
+        label,  # <-- NutritionLabel instance
+        filename="nutrition_label.png",
+        bg_color="#ffffff",
+        header_color="#cccccc",
+        stripe=True
+    ):
         """Render the nutrition label as an image from dict data."""
-        df = pd.DataFrame(list(data.items()), columns=["Nutrient", "Value"])
+         # Build table rows (formatted, slightly indented)
+        rows = [
+            ("Calories", f"{label.calories:.0f} kcal"),
+            ("Total fat", f"{label.total_fat:.1f} g"),
+            ("   Saturated fat", f"{label.saturated_fat:.1f} g"),
+            ("Carbohydrate", f"{label.carbohydrate:.1f} g"),
+            ("   Dietary fiber", f"{label.dietary_fiber:.1f} g"),
+            ("   Sugars", f"{label.sugars:.1f} g"),
+            ("Protein", f"{label.protein:.1f} g"),
+        ]
 
+        df = pd.DataFrame(rows, columns=["Nutrient", "Value"])
         fig, ax = plt.subplots(figsize=(3, 5))
         fig.patch.set_facecolor(bg_color)
         ax.set_facecolor(bg_color)
@@ -75,9 +96,26 @@ class NutritionLabelGenerator:
         plt.close()
 
         return filepath
+    
+    def generate_dataset(self, n: int):
+        """Generate N random samples: (image_path, NutritionLabel, AugmentationParams)."""
+        dataset = []
+        for i in range(n):
+            label = self.generate_nutrition_data()
+            augment = AugmentationParams.random()
+            img_name = f"label_{i:04d}.png"
+            img_path = self.generate_image(label, img_name)
+
+            img = cv2.imread(img_path)
+
+            img = apply_augmentations(img, augment)
+
+            cv2.imwrite(img_path, img)
+
+            dataset.append((img_path, label, augment))
+        return dataset
 
 
-from augmentation import *
 
 if __name__ == "__main__":
     generator = NutritionLabelGenerator()
@@ -94,11 +132,15 @@ if __name__ == "__main__":
     # Apply augmentations
     warped = add_perspective(img)
     noisy = add_noise(img, 0.5)
-    brighter = adjust_brightness(img, 0.5)
+    brighter = adjust_brightness(img, 0.4)
     blurred = apply_gaussian_blur(img, 3)
     blurred2 = apply_gaussian_blur(img, 7)
     rotated15 = rotate_image(img, 15)
     rotated45 = rotate_image(img, 45)
+    scaled = scale_image(img, 0.35)
+
+    rotated_noise_blur = apply_gaussian_blur(add_noise(rotated15, 0.4), 7)
+    rotated_blur_noise = add_noise(apply_gaussian_blur(rotated15, 7), 0.4)
 
     # Save results
     cv2.imwrite("generated_labels/label_perspective.png", warped)
@@ -108,7 +150,22 @@ if __name__ == "__main__":
     cv2.imwrite("generated_labels/label_blur2.png", blurred2)
     cv2.imwrite("generated_labels/label_rot15.png", rotated15)
     cv2.imwrite("generated_labels/label_rot45.png", rotated45)
+    cv2.imwrite("generated_labels/label_scaled.png", scaled)
     
-    test_augmentations()
+    cv2.imwrite("generated_labels/label_RNB.png", rotated_noise_blur)
+    cv2.imwrite("generated_labels/label_RBN.png", rotated_blur_noise)
+    #test_augmentations()
 
     print("Generated base + augmented images in 'generated_labels'.")
+
+    print(data)
+
+    gen = NutritionLabelGenerator()
+    dataset = gen.generate_dataset(5)
+
+    for path, label, aug in dataset:
+        print(path)
+        print(label)
+        print(aug)
+        print("-" * 40)
+
