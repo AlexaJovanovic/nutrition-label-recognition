@@ -1,3 +1,24 @@
 TESSERACT OCR
 
 tesseract je neki softver koji je razvio gugl mora da se skine ceo model na komp
+
+
+
+gray scale
+
+binarizacija
+
+rotacija
+
+dilatacija i erozija
+
+detekcija tabele
+
+// full tabela + clanak 
+https://github.com/livefiredev/ocr-extract-table-from-image-python
+https://livefiredev.com/how-to-extract-table-from-image-in-python-opencv-ocr/
+
+// youtube kurs
+https://github.com/wjbmattingly/ocr_python_textbook
+https://www.youtube.com/watch?v=ADV-AjAXHdc&list=PL2VXyKi-KpYuTAZz__9KVl1jQz74bDG7i&index=4
+https://becominghuman.ai/how-to-automatically-deskew-straighten-a-text-image-using-opencv-a0c30aed83df
