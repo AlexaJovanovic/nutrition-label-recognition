@@ -4,9 +4,9 @@ import numpy as np
 from regex_matching import *
 
 path = r'./generated_labels/'
-path = r'./temp/'
+#path = r'./temp/'
 img_name = "label_0_base.png"
-img_name = "rotated_fixed.jpg"
+#img_name = "rotated_fixed.jpg"
 
 def pretty_print_easyocr(results):
     """
@@ -51,8 +51,9 @@ print(easyocr_to_lines(results))
 final_res = extract_nutrients(easyocr_to_lines(results), nutrient_aliases)
 
 # Save the result
-output_path = path + "detected_text_kola_bin.png"
+output_path = path + "detected_text_2.png"
 cv2.imwrite(output_path, image)
 
 print(final_res)
 print(f"Saved result with bounding boxes to {output_path}")
+

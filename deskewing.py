@@ -51,12 +51,12 @@ def rotateImage(cvImage, angle: float):
 # Deskew image
 def deskew(cvImage):
     angle = getSkewAngle(cvImage)
-    return rotateImage(cvImage, -1.0 * (-15))
+    return rotateImage(cvImage, -1.0 * angle)
 
 new = cv2.imread("generated_labels/kola_rot_crop.jpg")
 fixed = deskew(new)
-gray = cv2.cvtColor(fixed, cv2.COLOR_BGR2GRAY)
-thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_OTSU)[1]
-kernel = np.ones((2,2),np.uint8)
-image = cv2.erode(thresh, kernel, iterations=2)
-cv2.imwrite("temp/rotated_fixed_erroded.jpg", image)
+# gray = cv2.cvtColor(fixed, cv2.COLOR_BGR2GRAY)
+# thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_OTSU)[1]
+# kernel = np.ones((2,2),np.uint8)
+# image = cv2.erode(thresh, kernel, iterations=2)
+cv2.imwrite("temp/rotated_fixed.jpg", fixed)

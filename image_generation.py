@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from nutrition_label import NutritionLabel
+from nutrition_label import NutritionLabelData
 from augmentation import *
 
 class NutritionLabelGenerator:
@@ -36,7 +36,7 @@ class NutritionLabelGenerator:
         # Saturated fat ≤ total fat
         sat_fat = round(random.uniform(0, fat), 1)
 
-        return NutritionLabel(
+        return NutritionLabelData(
             calories=calories,
             total_fat=fat,
             saturated_fat=sat_fat,
