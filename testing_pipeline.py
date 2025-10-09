@@ -29,6 +29,7 @@ except ImportError:
 from nutrition_label import NutritionLabelData, evaluate_dataset, nutrition_similarity, presence_metrics
 from image_generation import NutritionLabelGenerator
 from regex_matching import extract_nutrients, easyocr_to_lines, nutrient_aliases
+from deskewing_advanced import DeskewingPipeline, RotationResult
 
 
 class TestingPipeline:
@@ -40,7 +41,10 @@ class TestingPipeline:
         self,
         output_dir: str = "test_results",
         dataset_dir: str = "test_dataset",
-        use_gpu: bool = False
+        use_gpu: bool = False,
+        use_deskewing: bool = False,
+        deskew_method: str = "ensemble",
+        deskew_confidence_threshold: float = 0.3
     ):
         """
         Initialize the testing pipeline.
@@ -49,10 +53,16 @@ class TestingPipeline:
             output_dir: Directory to save test results and reports
             dataset_dir: Directory to save generated test dataset
             use_gpu: Whether to use GPU for OCR (if available)
+            use_deskewing: Whether to apply deskewing before OCR
+            deskew_method: Deskewing method ("contour_based", "hough_lines", "ensemble")
+            deskew_confidence_threshold: Minimum confidence to apply rotation correction
         """
         self.output_dir = output_dir
         self.dataset_dir = dataset_dir
         self.use_gpu = use_gpu
+        self.use_deskewing = use_deskewing
+        self.deskew_method = deskew_method
+        self.deskew_confidence_threshold = deskew_confidence_threshold
 
         # Create directories
         os.makedirs(output_dir, exist_ok=True)
@@ -63,12 +73,21 @@ class TestingPipeline:
         self.reader = easyocr.Reader(['en'], gpu=use_gpu)
         print("OCR reader initialized.")
 
+        # Initialize deskewing pipeline if enabled
+        if self.use_deskewing:
+            print("Initializing deskewing pipeline...")
+            self.deskewer = DeskewingPipeline(debug=False)
+            print("Deskewing pipeline initialized.")
+        else:
+            self.deskewer = None
+
         # Storage for results
         self.ground_truth: List[NutritionLabelData] = []
         self.predictions: List[NutritionLabelData] = []
         self.image_paths: List[str] = []
         self.ocr_times: List[float] = []
         self.extraction_times: List[float] = []
+        self.rotation_results: List[Optional[RotationResult]] = []
 
     def generate_dataset(self, n_samples: int = 50) -> List[Tuple[str, NutritionLabelData]]:
         """
@@ -90,20 +109,34 @@ class TestingPipeline:
         print(f"Dataset generated: {len(processed_dataset)} images in '{self.dataset_dir}'")
         return processed_dataset
 
-    def run_ocr(self, image_path: str) -> Tuple[List, float]:
+    def run_ocr(self, image_path: str) -> Tuple[List, float, Optional[RotationResult]]:
         """
-        Run OCR on a single image.
+        Run OCR on a single image, with optional deskewing.
 
         Args:
             image_path: Path to the image
 
         Returns:
-            Tuple of (ocr_results, processing_time_seconds)
+            Tuple of (ocr_results, processing_time_seconds, rotation_result)
         """
+        # Load image
+        image = cv2.imread(image_path)
+        rotation_result = None
+
+        # Apply deskewing if enabled
+        if self.use_deskewing and self.deskewer is not None:
+            image, rotation_result = self.deskewer.deskew(
+                image,
+                method=self.deskew_method,
+                confidence_threshold=self.deskew_confidence_threshold
+            )
+
+        # Run OCR
         start_time = time.time()
-        results = self.reader.readtext(image_path)
+        results = self.reader.readtext(image)
         elapsed = time.time() - start_time
-        return results, elapsed
+
+        return results, elapsed, rotation_result
 
     def extract_prediction(self, ocr_results: List) -> Tuple[NutritionLabelData, float]:
         """
@@ -135,10 +168,11 @@ class TestingPipeline:
         self.image_paths = []
         self.ocr_times = []
         self.extraction_times = []
+        self.rotation_results = []
 
         for img_path, true_label in tqdm(dataset, desc="Processing images"):
-            # Run OCR
-            ocr_results, ocr_time = self.run_ocr(img_path)
+            # Run OCR (with optional deskewing)
+            ocr_results, ocr_time, rotation_result = self.run_ocr(img_path)
 
             # Extract nutrients
             pred_label, extraction_time = self.extract_prediction(ocr_results)
@@ -149,6 +183,7 @@ class TestingPipeline:
             self.image_paths.append(img_path)
             self.ocr_times.append(ocr_time)
             self.extraction_times.append(extraction_time)
+            self.rotation_results.append(rotation_result)
 
         print(f"Predictions complete. Avg OCR time: {np.mean(self.ocr_times):.3f}s")
 
@@ -183,11 +218,31 @@ class TestingPipeline:
             "avg_total_time_per_image": float(np.mean([o + e for o, e in zip(self.ocr_times, self.extraction_times)]))
         }
 
+        # Deskewing statistics (if enabled)
+        deskewing_stats = None
+        if self.use_deskewing:
+            valid_rotations = [r for r in self.rotation_results if r is not None]
+            if valid_rotations:
+                angles = [r.angle for r in valid_rotations]
+                confidences = [r.confidence for r in valid_rotations]
+                corrected = sum(1 for r in valid_rotations if abs(r.angle) > 1.0)
+
+                deskewing_stats = {
+                    "n_images_processed": len(valid_rotations),
+                    "n_images_corrected": corrected,
+                    "correction_rate": float(corrected / len(valid_rotations)) if valid_rotations else 0.0,
+                    "avg_angle": float(np.mean(angles)),
+                    "avg_confidence": float(np.mean(confidences)),
+                    "max_angle": float(np.max(np.abs(angles))),
+                    "method": self.deskew_method
+                }
+
         results = {
             "dataset_metrics": dataset_metrics,
             "per_sample_similarities": per_sample_similarities,
             "per_sample_presence": per_sample_presence,
             "performance": performance_metrics,
+            "deskewing": deskewing_stats,
             "n_samples": len(self.ground_truth)
         }
 
@@ -241,6 +296,20 @@ class TestingPipeline:
         report.append(f"Average Total Time:      {perf['avg_total_time_per_image']:.3f}s per image")
         report.append(f"Total Processing Time:   {perf['total_time']:.2f}s")
         report.append("")
+
+        # Deskewing statistics (if available)
+        if results.get('deskewing'):
+            report.append("-" * 80)
+            report.append("DESKEWING STATISTICS")
+            report.append("-" * 80)
+            dsk = results['deskewing']
+            report.append(f"Method: {dsk['method']}")
+            report.append(f"Images Processed:  {dsk['n_images_processed']}")
+            report.append(f"Images Corrected:  {dsk['n_images_corrected']} ({dsk['correction_rate']*100:.1f}%)")
+            report.append(f"Average Angle:     {dsk['avg_angle']:.2f}°")
+            report.append(f"Maximum Angle:     {dsk['max_angle']:.2f}°")
+            report.append(f"Average Confidence: {dsk['avg_confidence']:.2f}")
+            report.append("")
 
         # Distribution statistics
         report.append("-" * 80)
@@ -362,14 +431,15 @@ def main():
     Main function to run the testing pipeline with default parameters.
     """
     # Configuration
-    N_SAMPLES = 50  # Number of test images to generate
+    N_SAMPLES = 20  # Number of test images to generate
     USE_GPU = False  # Set to True if you have CUDA-capable GPU
 
     # Initialize and run pipeline
     pipeline = TestingPipeline(
         output_dir="test_results",
         dataset_dir="test_dataset",
-        use_gpu=USE_GPU
+        use_gpu=USE_GPU,
+        use_deskewing=True
     )
 
     # Run complete pipeline
