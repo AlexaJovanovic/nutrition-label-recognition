@@ -32,6 +32,10 @@ def extract_nutrients(lines, nutrient_aliases):
                 match = re.search(r"(\d+[.,]?\d*)\s*(kcal|kj|g|mg|mcg|µg)?", lower_line)
                 if match:
                     value = float(match.group(1).replace(",", "."))
+                    # convertion to kcal from kj if that was detected
+                    print(match)
+                    if ("kj" in match.group()):
+                        value = int(value/4.2)
                     nutrients[nutrient] = value
                     break  # stop at first match for this line
 
