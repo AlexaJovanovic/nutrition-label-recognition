@@ -12,6 +12,10 @@ venv/
 generated_labels/*
 temp/*
 
+# Testing output
+test_results/*
+test_dataset/*
+
 # VS Code
 .vscode/*
 !.vscode/settings.json
