@@ -1,0 +1,4 @@
+from .base_extractor import AbstractLabelExtractor
+from .regex_matching_extractor import RegexMatchingExtractor
+
+__all__ = ["AbstractLabelExtractor", "RegexMatchingExtractor"]

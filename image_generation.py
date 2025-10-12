@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from nutrition_label import NutritionLabelData
+from label_extraction_core.nutrition_label import NutritionLabelData
 from augmentation import *
 
 class NutritionLabelGenerator:

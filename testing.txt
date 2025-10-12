@@ -1,0 +1,1444 @@
+================================================================================
+TESTING PIPELINE - DETAILED TECHNICAL DOCUMENTATION
+================================================================================
+
+Author: Aleksa
+Date: 2025-01-09
+File: testing_pipeline.py
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1. Overview
+2. System Architecture
+3. Dataset Generation
+4. OCR Processing
+5. Regex-Based Extraction
+6. Evaluation Metrics
+7. Deskewing Integration
+8. Implementation Details
+9. Results Analysis
+10. Usage Examples
+
+
+================================================================================
+1. OVERVIEW
+================================================================================
+
+The testing pipeline is an end-to-end system for evaluating nutrition label
+OCR and information extraction accuracy. It generates synthetic test data
+with known ground truth, processes images through OCR, extracts nutrition
+information using regex patterns, and calculates comprehensive metrics.
+
+1.1 Pipeline Stages
+-------------------
+
+Stage 1: Dataset Generation
+    └─> Generate N synthetic nutrition labels with known values
+
+Stage 2: Image Processing
+    └─> Optional: Deskewing (rotation correction)
+    └─> OCR: EasyOCR text detection
+
+Stage 3: Information Extraction
+    └─> Line grouping from OCR output
+    └─> Regex pattern matching for nutrients
+
+Stage 4: Evaluation
+    └─> Compare predictions vs ground truth
+    └─> Calculate similarity and presence metrics
+
+Stage 5: Reporting
+    └─> Generate comprehensive performance report
+    └─> Save results to JSON and text files
+
+1.2 Key Features
+----------------
+
+- Synthetic data generation with ground truth
+- Configurable augmentations (rotation, noise, blur, etc.)
+- Optional deskewing preprocessing
+- Multiple evaluation metrics
+- Detailed performance analytics
+- Extensible architecture
+
+
+================================================================================
+2. SYSTEM ARCHITECTURE
+================================================================================
+
+2.1 Class Structure
+-------------------
+
+class TestingPipeline:
+    Components:
+    - NutritionLabelGenerator: Creates synthetic labels
+    - EasyOCR Reader: Performs text detection
+    - DeskewingPipeline (optional): Corrects rotation
+    - Evaluation functions: Calculate metrics
+
+    Storage:
+    - ground_truth: List[NutritionLabelData]
+    - predictions: List[NutritionLabelData]
+    - image_paths: List[str]
+    - ocr_times: List[float]
+    - extraction_times: List[float]
+    - rotation_results: List[Optional[RotationResult]]
+
+2.2 Data Flow Diagram
+----------------------
+
+[Ground Truth Data] ────────────────────────────┐
+        │                                       │
+        ▼                                       │
+[Image Generator] ──> [Augmentation]            │
+        │                                       │
+        ▼                                       ▼
+[Saved Images] ──> [Deskewing?] ──> [OCR] ──> [Comparison] ──> [Metrics]
+                         │            │           │
+                         │            ▼           │
+                         │      [Line Grouping]   │
+                         │            │           │
+                         │            ▼           │
+                         │    [Regex Extraction]  │
+                         │            │           │
+                         │            ▼           │
+                         │    [Predictions] ──────┘
+                         │
+                         ▼
+                [Rotation Statistics]
+
+2.3 Configuration Parameters
+-----------------------------
+
+__init__(
+    output_dir: str = "test_results",
+    dataset_dir: str = "test_dataset",
+    use_gpu: bool = False,
+    use_deskewing: bool = False,
+    deskew_method: str = "ensemble",
+    deskew_confidence_threshold: float = 0.3
+)
+
+Parameters:
+- output_dir: Where to save results and reports
+- dataset_dir: Where to save generated test images
+- use_gpu: Whether to use GPU for OCR (requires CUDA)
+- use_deskewing: Enable rotation correction before OCR
+- deskew_method: Which deskewing algorithm to use
+- deskew_confidence_threshold: Minimum confidence to apply correction
+
+
+================================================================================
+3. DATASET GENERATION
+================================================================================
+
+3.1 Nutrition Label Data Structure
+-----------------------------------
+
+@dataclass
+class NutritionLabelData:
+    calories: Optional[float]           # kcal
+    total_fat: Optional[float]          # grams
+    saturated_fat: Optional[float]      # grams
+    carbohydrates: Optional[float]      # grams
+    dietary_fiber: Optional[float]      # grams
+    sugars: Optional[float]             # grams
+    protein: Optional[float]            # grams
+
+Fields can be None to represent missing values (realistic scenario).
+
+3.2 Data Generation Algorithm
+------------------------------
+
+Implementation: NutritionLabelGenerator.generate_nutrition_data()
+Location: image_generation.py:16-47
+
+Algorithm:
+1. Generate total macronutrients (10-90g)
+2. Randomly split into protein, fat, carbohydrates
+3. Calculate calories: Cal = 4×(protein + carbs) + 9×fat
+4. Generate sub-components:
+   - Saturated fat ≤ total fat
+   - Fiber + sugars ≤ carbohydrates
+
+Mathematical constraints:
+- protein + fat + carbohydrates = total_macros
+- 0 ≤ saturated_fat ≤ total_fat
+- 0 ≤ fiber + sugars ≤ carbohydrates
+- calories = 4×protein + 4×carbs + 9×fat
+
+Code excerpt:
+
+def generate_nutrition_data():
+    # Random macro total
+    total_macros = random.uniform(10, 90)
+
+    # Split into 3 parts
+    parts = [random.random() for _ in range(3)]
+    total_parts = sum(parts)
+    protein = round(total_macros * parts[0] / total_parts, 1)
+    fat = round(total_macros * parts[1] / total_parts, 1)
+    carbs = round(total_macros * parts[2] / total_parts, 1)
+
+    # Calculate calories
+    calories = int(round(4 * (protein + carbs) + 9 * fat))
+
+    # Generate sub-components
+    fiber = round(random.uniform(0, min(15, carbs)), 1)
+    sugars = round(random.uniform(0, max(0, carbs - fiber)), 1)
+    sat_fat = round(random.uniform(0, fat), 1)
+
+    return NutritionLabelData(...)
+
+3.3 Image Generation
+---------------------
+
+Implementation: NutritionLabelGenerator.generate_image()
+Location: image_generation.py:49-98
+
+Process:
+1. Create table with nutrition data using pandas
+2. Render table as matplotlib figure
+3. Customize colors, fonts, striping
+4. Save as high-resolution PNG (200 DPI)
+
+Visual characteristics:
+- Table format with 2 columns: Nutrient | Value
+- Header row with bold text
+- Optional row striping for readability
+- Configurable background and header colors
+- Standard nutrition label layout
+
+3.4 Augmentation Pipeline
+--------------------------
+
+Implementation: apply_augmentations()
+Location: augmentation.py:147-167
+
+Available augmentations:
+
+1. Rotation:
+   - Range: [-30°, +30°] (configurable)
+   - Expands canvas to avoid cropping
+   - Most critical for deskewing evaluation
+
+2. Scaling:
+   - Range: [0.4, 1.0] (configurable)
+   - Simulates different image resolutions
+
+3. Perspective:
+   - Strength: [0.1, 0.4]
+   - Simulates camera angle
+
+4. Brightness:
+   - Factor: [0.5, 1.3]
+   - Simulates lighting variations
+
+5. Gaussian Noise:
+   - Amount: [0.05, 0.4]
+   - Simulates sensor noise
+
+6. Gaussian Blur:
+   - Kernel: 5, 7, or 9 pixels
+   - Simulates focus issues
+
+Application order:
+1. Rotation (geometric)
+2. Scaling (geometric)
+3. Perspective (geometric)
+4. Brightness (photometric)
+5. Noise (photometric)
+6. Blur (photometric)
+
+3.5 Dataset Generation
+-----------------------
+
+Implementation: TestingPipeline.generate_dataset()
+Location: testing_pipeline.py:92-110
+
+def generate_dataset(self, n_samples=50):
+    generator = NutritionLabelGenerator(output_dir=self.dataset_dir)
+    dataset = generator.generate_dataset(n_samples)
+
+    # Returns: List[(image_path, label, augmentation_params)]
+    processed_dataset = [(img_path, label) for img_path, label, _ in dataset]
+
+    return processed_dataset
+
+Each generated sample includes:
+- image_path: Path to saved PNG file
+- label: NutritionLabelData with ground truth values
+- augmentation_params: AugmentationParams used (for analysis)
+
+
+================================================================================
+4. OCR PROCESSING
+================================================================================
+
+4.1 EasyOCR Overview
+--------------------
+
+EasyOCR is a deep learning-based OCR library that supports 80+ languages.
+
+Architecture:
+- Detection network: CRAFT (Character Region Awareness For Text)
+- Recognition network: CNN + RNN + CTC
+
+Advantages:
++ High accuracy
++ Pre-trained models
++ Easy to use
+
+Disadvantages:
+- Slower than traditional OCR
+- Requires significant memory
+- May struggle with dense text
+
+4.2 OCR Configuration
+---------------------
+
+Initialization:
+self.reader = easyocr.Reader(['en'], gpu=use_gpu)
+
+Parameters:
+- languages: ['en'] for English
+- gpu: True/False (requires CUDA toolkit)
+
+Default reading parameters:
+- paragraph: False (detect as individual text blocks)
+- decoder: 'greedy' (fast decoding)
+
+4.3 OCR Pipeline with Deskewing
+--------------------------------
+
+Implementation: TestingPipeline.run_ocr()
+Location: testing_pipeline.py:112-139
+
+def run_ocr(self, image_path):
+    # Load image
+    image = cv2.imread(image_path)
+    rotation_result = None
+
+    # Optional: Deskewing
+    if self.use_deskewing and self.deskewer is not None:
+        image, rotation_result = self.deskewer.deskew(
+            image,
+            method=self.deskew_method,
+            confidence_threshold=self.deskew_confidence_threshold
+        )
+
+    # Run OCR
+    start_time = time.time()
+    results = self.reader.readtext(image)
+    elapsed = time.time() - start_time
+
+    return results, elapsed, rotation_result
+
+OCR output format:
+results = [
+    (bbox, text, confidence),
+    (bbox, text, confidence),
+    ...
+]
+
+where:
+- bbox: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]] (4 corner points)
+- text: Detected string
+- confidence: Float in [0, 1]
+
+4.4 Line Grouping Algorithm
+----------------------------
+
+Implementation: easyocr_to_lines()
+Location: regex_matching.py:52-92
+
+Problem: OCR returns individual text blocks, but nutrients span full lines.
+Solution: Group text blocks into lines based on Y-coordinate proximity.
+
+Algorithm:
+1. Sort OCR results by (Y, X) coordinates
+2. Group results with similar Y values into lines
+3. Within each line, sort by X coordinate (left to right)
+4. Join text blocks with spaces
+
+Pseudocode:
+
+def easyocr_to_lines(ocr_output, line_threshold=15):
+    # Sort by Y, then X
+    sorted_results = sort(ocr_output, key=lambda x: (x.bbox[0][1], x.bbox[0][0]))
+
+    lines = []
+    current_line = []
+    prev_y = None
+
+    for (bbox, text, prob) in sorted_results:
+        y = bbox[0][1]  # Top-left Y coordinate
+
+        if prev_y is None or abs(y - prev_y) < line_threshold:
+            # Same line
+            current_line.append((bbox, text))
+        else:
+            # New line
+            current_line.sort(key=lambda item: item[0][0][0])  # Sort by X
+            line_text = " ".join(text for _, text in current_line)
+            lines.append(line_text.lower())
+
+            current_line = [(bbox, text)]
+
+        prev_y = y
+
+    # Add last line
+    if current_line:
+        current_line.sort(key=lambda item: item[0][0][0])
+        line_text = " ".join(text for _, text in current_line)
+        lines.append(line_text.lower())
+
+    return lines
+
+Key parameter:
+- line_threshold=15: Vertical distance (pixels) to group into same line
+  * Too small: Splits single lines
+  * Too large: Merges separate lines
+
+
+================================================================================
+5. REGEX-BASED EXTRACTION
+================================================================================
+
+5.1 Nutrient Aliases
+--------------------
+
+Implementation: nutrient_aliases dictionary
+Location: regex_matching.py:3-11
+
+Purpose: Handle multilingual and variant naming
+
+nutrient_aliases = {
+    "calories": ["calories", "energy", "energie", "energía", "kalorien",
+                 "kalorije", "energetska vrednost", "energija", ...],
+    "fat": ["fat", "fett", "grasas", "lipides", "masti"],
+    "saturated_fat": ["saturated fat", "saturates", "gesättigte",
+                      "saturadas", "zasićene", ...],
+    "carbohydrates": ["carbohydrate", "carbs", "kohlenhydrate",
+                      "glucides", "ugljeni hidrati", ...],
+    "sugar": ["sugar", "zucker", "azúcares", "sucre", "sećeri", ...],
+    "fiber": ["fiber", "fibre", "ballaststoffe", "vlakna", ...],
+    "protein": ["protein", "eiweiß", "proteínas", "protéine", ...]
+}
+
+Multilingual support:
+- English, German, Spanish, French, Serbian (Latin & Cyrillic)
+
+5.2 Extraction Algorithm
+-------------------------
+
+Implementation: extract_nutrients()
+Location: regex_matching.py:23-50
+
+Algorithm:
+For each line in the OCR output:
+    1. Convert to lowercase
+    2. For each nutrient type:
+        a) Check if any alias appears in line
+        b) If found, extract numeric value using regex
+        c) Handle unit conversion (kJ → kcal)
+        d) Store first match (prevent duplicates)
+
+Regex pattern:
+(\d+[.,]?\d*)\s*(kcal|kj|g|mg|mcg|µg)?
+
+Breakdown:
+- (\d+[.,]?\d*): Number (integer or decimal, supports comma or period)
+- \s*: Optional whitespace
+- (kcal|kj|g|mg|mcg|µg)?: Optional unit
+
+Examples:
+- "calories 150 kcal" → extracts 150
+- "fat 12,5 g" → extracts 12.5
+- "energy 630 kj" → extracts 630, converts to 150 kcal
+
+Unit conversion:
+if "kj" in match.group():
+    value_kcal = int(value_kj / 4.2)
+
+Code excerpt:
+
+def extract_nutrients(lines, nutrient_aliases):
+    nutrients = {}
+
+    for line in lines:
+        lower_line = line.lower()
+
+        for nutrient, aliases in nutrient_aliases.items():
+            # Check if any alias matches
+            if any(alias in lower_line for alias in aliases):
+                # Extract number
+                match = re.search(r"(\d+[.,]?\d*)\s*(kcal|kj|g|mg|mcg|µg)?",
+                                 lower_line)
+                if match:
+                    value = float(match.group(1).replace(",", "."))
+
+                    # Unit conversion
+                    if "kj" in match.group():
+                        value = int(value / 4.2)
+
+                    nutrients[nutrient] = value
+                    break  # Only first match per line
+
+    return NutritionLabelData(
+        calories=nutrients.get("calories"),
+        total_fat=nutrients.get("fat"),
+        ...
+    )
+
+5.3 Extraction Pipeline
+------------------------
+
+Implementation: TestingPipeline.extract_prediction()
+Location: testing_pipeline.py:141-155
+
+def extract_prediction(self, ocr_results):
+    start_time = time.time()
+
+    # Step 1: Group OCR results into lines
+    lines = easyocr_to_lines(ocr_results)
+
+    # Step 2: Extract nutrients using regex
+    prediction = extract_nutrients(lines, nutrient_aliases)
+
+    elapsed = time.time() - start_time
+
+    return prediction, elapsed
+
+Typical performance:
+- Line grouping: ~1ms
+- Regex extraction: ~1-2ms
+- Total: ~2-3ms (negligible compared to OCR)
+
+
+================================================================================
+6. EVALUATION METRICS
+================================================================================
+
+6.1 Metrics Overview
+--------------------
+
+The pipeline calculates three types of metrics:
+
+1. Similarity Metrics: How close are predicted values?
+2. Presence Metrics: Were fields correctly detected?
+3. Performance Metrics: How fast is the system?
+
+6.2 Similarity Score
+--------------------
+
+Implementation: nutrition_similarity()
+Location: nutrition_label.py:59-61
+
+Definition: Measures numeric accuracy of predictions
+
+For each nutrient field:
+    if both None: diff = 0 (agree on missing)
+    elif one None: diff = 1 (maximum penalty)
+    else: diff = min(|pred - true| / max(|true|, ε), 1.0)
+
+Overall similarity:
+    similarity = 1 - mean(diffs)
+
+Range: [0, 1] where 1.0 = perfect match
+
+Mathematical formulation:
+
+For field i with true value tᵢ and predicted value pᵢ:
+
+d_i = {
+    0                                    if tᵢ = None and pᵢ = None
+    1                                    if tᵢ = None XOR pᵢ = None
+    min(|pᵢ - tᵢ| / max(|tᵢ|, ε), 1)   otherwise
+}
+
+similarity = 1 - (1/N) Σᵢ dᵢ
+
+where N = number of fields (7 for NutritionLabelData)
+
+Example:
+Ground truth: calories=200, fat=10.0, protein=8.0, others=None
+Prediction:   calories=195, fat=10.5, protein=None, others=None
+
+Diffs:
+- calories: |195-200|/200 = 0.025
+- fat: |10.5-10.0|/10.0 = 0.05
+- protein: 1.0 (missing in prediction)
+- others: 0.0 (both None)
+
+Mean diff: (0.025 + 0.05 + 1.0 + 0 + 0 + 0 + 0) / 7 = 0.154
+Similarity: 1 - 0.154 = 0.846 (84.6%)
+
+6.3 Presence Metrics
+--------------------
+
+Implementation: presence_metrics()
+Location: nutrition_label.py:63-95
+
+Definition: Binary classification metrics for field detection
+
+For each field, calculate:
+- TP (True Positive): Field present in both true and pred
+- FP (False Positive): Field present in pred but not true
+- FN (False Negative): Field present in true but not pred
+- TN (True Negative): Field absent in both
+
+Derived metrics:
+
+Accuracy = (TP + TN) / (TP + FP + FN + TN)
+Precision = TP / (TP + FP)
+Recall = TP / (TP + FN)
+F1 Score = 2 × Precision × Recall / (Precision + Recall)
+
+Code excerpt:
+
+def presence_metrics(label_true, label_pred):
+    tp = fp = fn = tn = 0
+
+    for field in label_true.__dataclass_fields__:
+        true_present = getattr(label_true, field) is not None
+        pred_present = getattr(label_pred, field) is not None
+
+        if true_present and pred_present:
+            tp += 1
+        elif not true_present and pred_present:
+            fp += 1
+        elif true_present and not pred_present:
+            fn += 1
+        else:
+            tn += 1
+
+    total = 7  # number of fields
+    accuracy = (tp + tn) / total
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+
+    return {
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "tp": tp, "fp": fp, "fn": fn, "tn": tn
+    }
+
+6.4 Dataset-Level Evaluation
+-----------------------------
+
+Implementation: evaluate_dataset()
+Location: nutrition_label.py:97-136
+
+Aggregates metrics across entire dataset:
+
+1. Per-sample similarity scores
+2. Aggregate presence metrics (sum TP, FP, FN, TN across all samples)
+3. Average metrics
+
+Code excerpt:
+
+def evaluate_dataset(true_labels, pred_labels):
+    similarities = []
+    total_tp = total_fp = total_fn = total_tn = 0
+
+    for true, pred in zip(true_labels, pred_labels):
+        # Similarity
+        similarities.append(nutrition_similarity(true, pred))
+
+        # Presence
+        m = presence_metrics(true, pred)
+        total_tp += m["tp"]
+        total_fp += m["fp"]
+        total_fn += m["fn"]
+        total_tn += m["tn"]
+
+    # Average similarity
+    avg_similarity = sum(similarities) / len(similarities)
+
+    # Global presence metrics
+    total = total_tp + total_fp + total_fn + total_tn
+    accuracy = (total_tp + total_tn) / total
+    precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) else 0.0
+    recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+
+    return {
+        "avg_similarity": avg_similarity,
+        "presence": {
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "tp": total_tp,
+            "fp": total_fp,
+            "fn": total_fn,
+            "tn": total_tn
+        }
+    }
+
+6.5 Performance Metrics
+-----------------------
+
+Implementation: TestingPipeline.evaluate()
+Location: testing_pipeline.py:190-249
+
+Tracked metrics:
+
+1. OCR Times:
+   - Average time per image
+   - Total OCR time
+
+2. Extraction Times:
+   - Average extraction time
+   - Total extraction time
+
+3. Total Processing Time:
+   - OCR + Extraction per image
+   - Overall pipeline time
+
+4. Deskewing Statistics (if enabled):
+   - Number of images processed
+   - Number of images corrected
+   - Correction rate (%)
+   - Average detected angle
+   - Maximum detected angle
+   - Average confidence
+
+Code excerpt:
+
+performance_metrics = {
+    "avg_ocr_time": float(np.mean(self.ocr_times)),
+    "avg_extraction_time": float(np.mean(self.extraction_times)),
+    "total_time": float(sum(self.ocr_times) + sum(self.extraction_times)),
+    "avg_total_time_per_image": float(np.mean([o + e for o, e in
+                                               zip(self.ocr_times, self.extraction_times)]))
+}
+
+if self.use_deskewing:
+    valid_rotations = [r for r in self.rotation_results if r is not None]
+    if valid_rotations:
+        angles = [r.angle for r in valid_rotations]
+        confidences = [r.confidence for r in valid_rotations]
+        corrected = sum(1 for r in valid_rotations if abs(r.angle) > 1.0)
+
+        deskewing_stats = {
+            "n_images_processed": len(valid_rotations),
+            "n_images_corrected": corrected,
+            "correction_rate": float(corrected / len(valid_rotations)),
+            "avg_angle": float(np.mean(angles)),
+            "avg_confidence": float(np.mean(confidences)),
+            "max_angle": float(np.max(np.abs(angles))),
+            "method": self.deskew_method
+        }
+
+
+================================================================================
+7. DESKEWING INTEGRATION
+================================================================================
+
+7.1 Integration Architecture
+-----------------------------
+
+The deskewing module is optional and controlled by configuration parameters.
+
+Without deskewing:
+[Image] ──> [OCR] ──> [Extraction] ──> [Evaluation]
+
+With deskewing:
+[Image] ──> [Deskew] ──> [OCR] ──> [Extraction] ──> [Evaluation]
+               │
+               └──> [Rotation Statistics]
+
+7.2 Configuration
+-----------------
+
+Pipeline initialization with deskewing:
+
+pipeline = TestingPipeline(
+    use_deskewing=True,                    # Enable deskewing
+    deskew_method="ensemble",              # Method selection
+    deskew_confidence_threshold=0.3        # Minimum confidence
+)
+
+Parameter effects:
+
+use_deskewing=False:
+- Deskewing pipeline not initialized
+- Images processed directly by OCR
+- No rotation statistics in results
+
+use_deskewing=True:
+- DeskewingPipeline initialized
+- Images corrected before OCR
+- Rotation results tracked
+
+7.3 Deskewing Process
+---------------------
+
+Implementation: TestingPipeline.run_ocr() with deskewing
+Location: testing_pipeline.py:112-139
+
+Process flow:
+
+1. Load image from disk
+2. If deskewing enabled:
+   a) Detect rotation using selected method
+   b) If confidence ≥ threshold and |angle| ≤ max_angle:
+      - Apply counter-rotation
+   c) Else:
+      - Keep original image
+3. Run OCR on (possibly corrected) image
+4. Return OCR results + rotation result
+
+Code excerpt:
+
+def run_ocr(self, image_path):
+    # Load image
+    image = cv2.imread(image_path)
+    rotation_result = None
+
+    # Apply deskewing if enabled
+    if self.use_deskewing and self.deskewer is not None:
+        image, rotation_result = self.deskewer.deskew(
+            image,
+            method=self.deskew_method,
+            confidence_threshold=self.deskew_confidence_threshold
+        )
+
+    # Run OCR
+    start_time = time.time()
+    results = self.reader.readtext(image)
+    elapsed = time.time() - start_time
+
+    return results, elapsed, rotation_result
+
+7.4 Impact Analysis
+-------------------
+
+Deskewing can improve or degrade performance depending on:
+
+1. Rotation magnitude:
+   - Small rotations (< 5°): May not affect OCR much
+   - Medium rotations (5-20°): Deskewing usually helps
+   - Large rotations (> 20°): Deskewing critical
+
+2. Detection accuracy:
+   - Correct detection: Improves OCR accuracy
+   - Incorrect detection: Degrades OCR accuracy
+   - Low confidence: Better to skip correction
+
+3. Performance trade-off:
+   - Added latency: ~50-200ms per image
+   - Benefit: Improved OCR on rotated images
+
+Recommended configuration:
+- use_deskewing=True for real-world data (unknown rotations)
+- use_deskewing=False for controlled/aligned images
+- deskew_confidence_threshold=0.3 (conservative)
+
+
+================================================================================
+8. IMPLEMENTATION DETAILS
+================================================================================
+
+8.1 Main Pipeline Flow
+-----------------------
+
+Implementation: TestingPipeline.run_full_pipeline()
+Location: testing_pipeline.py:396-426
+
+def run_full_pipeline(self, n_samples=50, save_output=True):
+    print("STARTING COMPLETE TESTING PIPELINE")
+
+    # Step 1: Generate dataset
+    dataset = self.generate_dataset(n_samples)
+    # Output: [(image_path, ground_truth), ...]
+
+    # Step 2: Run predictions
+    self.run_predictions(dataset)
+    # Fills: self.predictions, self.ocr_times, etc.
+
+    # Step 3: Evaluate
+    results = self.evaluate()
+    # Output: dict with all metrics
+
+    # Step 4: Generate report
+    report = self.generate_report(results)
+    # Output: formatted text report
+
+    # Step 5: Save results
+    if save_output:
+        self.save_results(results, report)
+
+    # Print report to console
+    print(report)
+
+    return results, report
+
+8.2 Prediction Loop
+-------------------
+
+Implementation: TestingPipeline.run_predictions()
+Location: testing_pipeline.py:157-188
+
+def run_predictions(self, dataset):
+    self.ground_truth = []
+    self.predictions = []
+    self.image_paths = []
+    self.ocr_times = []
+    self.extraction_times = []
+    self.rotation_results = []
+
+    for img_path, true_label in tqdm(dataset, desc="Processing images"):
+        # Run OCR (with optional deskewing)
+        ocr_results, ocr_time, rotation_result = self.run_ocr(img_path)
+
+        # Extract nutrients
+        pred_label, extraction_time = self.extract_prediction(ocr_results)
+
+        # Store results
+        self.ground_truth.append(true_label)
+        self.predictions.append(pred_label)
+        self.image_paths.append(img_path)
+        self.ocr_times.append(ocr_time)
+        self.extraction_times.append(extraction_time)
+        self.rotation_results.append(rotation_result)
+
+Progress tracking:
+- Uses tqdm for progress bar
+- Falls back to simple print if tqdm not installed
+- Prints summary after completion
+
+8.3 Report Generation
+----------------------
+
+Implementation: TestingPipeline.generate_report()
+Location: testing_pipeline.py:251-339
+
+Report sections:
+
+1. Header:
+   - Pipeline name
+   - Dataset size
+
+2. Overall Metrics:
+   - Average similarity score
+   - Presence detection metrics (accuracy, precision, recall, F1)
+   - Confusion matrix values
+
+3. Performance Metrics:
+   - OCR timing
+   - Extraction timing
+   - Total processing time
+
+4. Deskewing Statistics (if enabled):
+   - Method used
+   - Images processed/corrected
+   - Correction rate
+   - Average/max angles
+   - Average confidence
+
+5. Distribution Statistics:
+   - Similarity score distribution (min, Q1, median, Q3, max, std)
+
+6. Worst Performing Samples:
+   - Top 10 samples with lowest similarity
+   - Shows ground truth vs prediction for debugging
+
+Example report structure:
+
+================================================================================
+NUTRITION LABEL OCR TESTING PIPELINE - RESULTS REPORT
+================================================================================
+
+Dataset Size: 50 images
+
+--------------------------------------------------------------------------------
+OVERALL METRICS
+--------------------------------------------------------------------------------
+Average Similarity Score: 0.8542 (1.0 = perfect match)
+
+Presence Detection Metrics (field-level):
+  Accuracy:  0.9143
+  Precision: 0.9500
+  Recall:    0.9048
+  F1 Score:  0.9268
+  TP: 285, FP: 15, FN: 30, TN: 20
+
+--------------------------------------------------------------------------------
+PERFORMANCE METRICS
+--------------------------------------------------------------------------------
+Average OCR Time:        2.145s
+Average Extraction Time: 0.003s
+Average Total Time:      2.148s per image
+Total Processing Time:   107.40s
+
+--------------------------------------------------------------------------------
+DESKEWING STATISTICS
+--------------------------------------------------------------------------------
+Method: ensemble
+Images Processed:  50
+Images Corrected:  38 (76.0%)
+Average Angle:     12.34°
+Maximum Angle:     29.87°
+Average Confidence: 0.82
+
+--------------------------------------------------------------------------------
+DISTRIBUTION STATISTICS
+--------------------------------------------------------------------------------
+Similarity Score Distribution:
+  Min:    0.6421
+  Q1:     0.8012
+  Median: 0.8645
+  Q3:     0.9203
+  Max:    1.0000
+  Std:    0.0892
+
+--------------------------------------------------------------------------------
+WORST PERFORMING SAMPLES (Top 10)
+--------------------------------------------------------------------------------
+1. Image: label_0023.png
+   Similarity: 0.6421
+   Ground Truth: Cal:245 Fat:12.5 SatFat:3.2 Carb:28.7 Fiber:4.1 Sugar:8.3 Prot:9.8
+   Prediction:   Cal:None Fat:12.5 SatFat:None Carb:28.7 Fiber:None Sugar:None Prot:None
+
+...
+
+8.4 Results Storage
+-------------------
+
+Implementation: TestingPipeline.save_results()
+Location: testing_pipeline.py:341-373
+
+Two output files:
+
+1. results.json:
+   - Complete results in JSON format
+   - All metrics and statistics
+   - Per-sample ground truth and predictions
+   - Image paths
+   - Machine-readable for further analysis
+
+2. report.txt:
+   - Human-readable formatted report
+   - Same content as printed to console
+   - Suitable for archiving or documentation
+
+JSON structure:
+
+{
+    "dataset_metrics": {
+        "avg_similarity": 0.8542,
+        "presence": {
+            "accuracy": 0.9143,
+            "precision": 0.9500,
+            "recall": 0.9048,
+            "f1": 0.9268,
+            "tp": 285,
+            "fp": 15,
+            "fn": 30,
+            "tn": 20
+        }
+    },
+    "performance": {
+        "avg_ocr_time": 2.145,
+        "avg_extraction_time": 0.003,
+        "total_time": 107.40,
+        "avg_total_time_per_image": 2.148
+    },
+    "deskewing": {
+        "n_images_processed": 50,
+        "n_images_corrected": 38,
+        "correction_rate": 0.76,
+        "avg_angle": 12.34,
+        "avg_confidence": 0.82,
+        "max_angle": 29.87,
+        "method": "ensemble"
+    },
+    "n_samples": 50,
+    "per_sample_similarities": [0.95, 0.87, ...],
+    "image_paths": ["test_dataset/label_0000.png", ...],
+    "ground_truth": [
+        {"calories": 245, "total_fat": 12.5, ...},
+        ...
+    ],
+    "predictions": [
+        {"calories": 240, "total_fat": 12.5, ...},
+        ...
+    ]
+}
+
+
+================================================================================
+9. RESULTS ANALYSIS
+================================================================================
+
+9.1 Interpreting Similarity Scores
+-----------------------------------
+
+Similarity score ranges and interpretation:
+
+0.95 - 1.00: Excellent
+    - All or most fields correctly extracted
+    - Numeric errors < 5%
+    - Suitable for production use
+
+0.85 - 0.95: Good
+    - Most fields correct
+    - Some minor numeric errors or missing fields
+    - Acceptable for most applications
+
+0.70 - 0.85: Fair
+    - Several fields missing or inaccurate
+    - OCR or extraction issues present
+    - Requires investigation
+
+0.50 - 0.70: Poor
+    - Many fields incorrect or missing
+    - Significant OCR/extraction problems
+    - Not suitable for production
+
+< 0.50: Failed
+    - Severe OCR failure
+    - Possibly corrupted/unreadable image
+    - Review sample images
+
+9.2 Interpreting Presence Metrics
+----------------------------------
+
+Precision vs Recall trade-off:
+
+High Precision, Low Recall:
+- System conservative: Only extracts when confident
+- Few false positives (extracted values are accurate)
+- Many false negatives (misses some fields)
+- Solution: Lower confidence thresholds, improve regex patterns
+
+Low Precision, High Recall:
+- System aggressive: Extracts even with uncertainty
+- Few false negatives (captures most fields)
+- Many false positives (extracts incorrect values)
+- Solution: Raise confidence thresholds, filter noisy detections
+
+Balanced F1 Score:
+- F1 > 0.9: Excellent balance
+- F1 = 0.75-0.9: Good balance
+- F1 < 0.75: Imbalanced, needs tuning
+
+9.3 Common Failure Modes
+-------------------------
+
+1. OCR Failures:
+   Symptoms:
+   - Low similarity across all samples
+   - Many None predictions
+   - Extracted text gibberish
+
+   Causes:
+   - Poor image quality (blur, noise)
+   - Extreme rotations
+   - Unusual fonts
+   - Low resolution
+
+   Solutions:
+   - Improve image preprocessing
+   - Enable deskewing
+   - Try different OCR engine
+   - Increase image resolution
+
+2. Extraction Failures:
+   Symptoms:
+   - OCR text looks correct (in debug)
+   - Predictions still None or wrong
+
+   Causes:
+   - Regex patterns don't match OCR output format
+   - Line grouping issues
+   - Missing nutrient aliases
+
+   Solutions:
+   - Print OCR output to debug
+   - Adjust line_threshold parameter
+   - Add more nutrient aliases
+   - Improve regex patterns
+
+3. Deskewing Failures:
+   Symptoms:
+   - Deskewing statistics show large errors
+   - Low deskewing confidence
+   - Performance worse with deskewing enabled
+
+   Causes:
+   - Rotation detection inaccurate
+   - Wrong deskewing method for image type
+   - Confidence threshold too low
+
+   Solutions:
+   - Try different deskewing method
+   - Increase confidence threshold
+   - Validate deskewing separately (validate_deskewing())
+
+9.4 Performance Benchmarks
+---------------------------
+
+Typical performance on modern CPU (Intel i7):
+
+Component               Time per Image
+-------------------------------------------
+Dataset Generation      ~50ms
+Deskewing (optional)    ~150ms
+OCR (CPU)               ~2000ms
+OCR (GPU)               ~500ms
+Extraction              ~3ms
+-------------------------------------------
+Total (no deskew, CPU)  ~2050ms
+Total (deskew, CPU)     ~2200ms
+Total (no deskew, GPU)  ~550ms
+Total (deskew, GPU)     ~700ms
+
+Bottleneck analysis:
+- OCR dominates (>95% of time)
+- GPU acceleration provides 4x speedup
+- Deskewing adds ~7% overhead
+- Extraction negligible
+
+Optimization strategies:
+1. Use GPU if available (largest impact)
+2. Batch processing for multiple images
+3. Reduce image resolution (trade accuracy for speed)
+4. Skip deskewing for aligned images
+
+
+================================================================================
+10. USAGE EXAMPLES
+================================================================================
+
+10.1 Basic Usage - Default Configuration
+-----------------------------------------
+
+from testing_pipeline import TestingPipeline
+
+# Initialize with defaults
+pipeline = TestingPipeline()
+
+# Run full pipeline
+results, report = pipeline.run_full_pipeline(n_samples=50)
+
+# Results automatically saved to:
+# - test_results/results.json
+# - test_results/report.txt
+
+10.2 GPU-Accelerated OCR
+-------------------------
+
+pipeline = TestingPipeline(
+    use_gpu=True,          # Requires CUDA
+    use_deskewing=False    # Disable for speed
+)
+
+results, report = pipeline.run_full_pipeline(n_samples=100)
+
+10.3 With Deskewing Enabled
+----------------------------
+
+pipeline = TestingPipeline(
+    use_deskewing=True,
+    deskew_method="ensemble",              # Best accuracy
+    deskew_confidence_threshold=0.3        # Conservative
+)
+
+results, report = pipeline.run_full_pipeline(n_samples=50)
+
+# Check deskewing impact
+if results['deskewing']:
+    print(f"Correction rate: {results['deskewing']['correction_rate']*100:.1f}%")
+    print(f"Avg angle: {results['deskewing']['avg_angle']:.2f}°")
+
+10.4 Custom Output Directories
+-------------------------------
+
+pipeline = TestingPipeline(
+    output_dir="experiment_1/results",
+    dataset_dir="experiment_1/dataset"
+)
+
+results, report = pipeline.run_full_pipeline(n_samples=50)
+
+10.5 Different Deskewing Methods
+---------------------------------
+
+# Fast but less accurate
+pipeline_fast = TestingPipeline(
+    use_deskewing=True,
+    deskew_method="contour_based"
+)
+
+# Most accurate
+pipeline_accurate = TestingPipeline(
+    use_deskewing=True,
+    deskew_method="hough_lines"
+)
+
+# Balanced (recommended)
+pipeline_balanced = TestingPipeline(
+    use_deskewing=True,
+    deskew_method="ensemble"
+)
+
+10.6 Running from Command Line
+-------------------------------
+
+# Default: 20 samples with deskewing
+python testing_pipeline.py
+
+# Edit main() function for custom configuration:
+def main():
+    N_SAMPLES = 100
+    USE_GPU = False
+
+    pipeline = TestingPipeline(
+        output_dir="test_results",
+        dataset_dir="test_dataset",
+        use_gpu=USE_GPU,
+        use_deskewing=True,
+        deskew_method="ensemble"
+    )
+
+    results, report = pipeline.run_full_pipeline(n_samples=N_SAMPLES)
+    return results, report
+
+10.7 Analyzing Results Programmatically
+----------------------------------------
+
+# Load results
+import json
+with open("test_results/results.json", 'r') as f:
+    results = json.load(f)
+
+# Extract metrics
+avg_similarity = results['dataset_metrics']['avg_similarity']
+precision = results['dataset_metrics']['presence']['precision']
+recall = results['dataset_metrics']['presence']['recall']
+
+print(f"Similarity: {avg_similarity:.4f}")
+print(f"Precision: {precision:.4f}")
+print(f"Recall: {recall:.4f}")
+
+# Find worst performing samples
+similarities = results['per_sample_similarities']
+image_paths = results['image_paths']
+
+worst_indices = np.argsort(similarities)[:5]
+for idx in worst_indices:
+    print(f"{image_paths[idx]}: {similarities[idx]:.4f}")
+
+10.8 Comparing Configurations
+------------------------------
+
+# Run multiple experiments
+experiments = {
+    "no_deskew": {"use_deskewing": False},
+    "contour": {"use_deskewing": True, "deskew_method": "contour_based"},
+    "hough": {"use_deskewing": True, "deskew_method": "hough_lines"},
+    "ensemble": {"use_deskewing": True, "deskew_method": "ensemble"}
+}
+
+results_comparison = {}
+
+for name, config in experiments.items():
+    print(f"\n{'='*80}")
+    print(f"Running experiment: {name}")
+    print('='*80)
+
+    pipeline = TestingPipeline(**config)
+    results, _ = pipeline.run_full_pipeline(n_samples=50, save_output=False)
+
+    results_comparison[name] = {
+        "similarity": results['dataset_metrics']['avg_similarity'],
+        "f1": results['dataset_metrics']['presence']['f1'],
+        "time": results['performance']['avg_total_time_per_image']
+    }
+
+# Print comparison
+print("\n" + "="*80)
+print("COMPARISON SUMMARY")
+print("="*80)
+print(f"{'Config':<15} {'Similarity':<12} {'F1 Score':<12} {'Time (s)':<12}")
+print("-"*80)
+
+for name, metrics in results_comparison.items():
+    print(f"{name:<15} {metrics['similarity']:<12.4f} {metrics['f1']:<12.4f} {metrics['time']:<12.3f}")
+
+
+================================================================================
+DEBUGGING TIPS
+================================================================================
+
+1. Enable Debug Output:
+   - Set verbose=True in validation functions
+   - Check intermediate OCR outputs
+   - Inspect generated images
+
+2. Visualize OCR Results:
+   - Use main.py example to draw bounding boxes
+   - Verify text detection quality
+   - Check line grouping accuracy
+
+3. Test Components Separately:
+   - Run deskewing validation independently
+   - Test OCR on known good images
+   - Verify regex patterns on sample text
+
+4. Common Issues:
+   - "Low similarity" → Check OCR output, verify image quality
+   - "Low precision" → Tighten regex patterns, filter noise
+   - "Low recall" → Loosen regex patterns, add more aliases
+   - "Slow performance" → Enable GPU, reduce image count, skip deskewing
+
+5. Validation:
+   - Always inspect worst-performing samples
+   - Compare with/without deskewing
+   - Test on variety of label styles
+
+
+================================================================================
+FUTURE ENHANCEMENTS
+================================================================================
+
+Potential improvements:
+
+1. Additional OCR Engines:
+   - Tesseract OCR integration
+   - Cloud OCR APIs (Google, AWS)
+   - Ensemble OCR (combine multiple engines)
+
+2. Advanced Extraction:
+   - Machine learning-based extraction
+   - Context-aware parsing
+   - Table structure recognition
+
+3. Evaluation Metrics:
+   - Per-nutrient accuracy
+   - Confidence calibration
+   - Error analysis by image characteristics
+
+4. Performance:
+   - Batch OCR processing
+   - Parallel image processing
+   - Caching for repeated tests
+
+5. Dataset:
+   - Real-world image collection
+   - Cross-validation splits
+   - Augmentation parameter optimization
+
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================

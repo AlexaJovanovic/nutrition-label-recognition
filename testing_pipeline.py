@@ -26,7 +26,7 @@ except ImportError:
         print(f"{desc}...")
         return iterable
 
-from nutrition_label import NutritionLabelData, evaluate_dataset, nutrition_similarity, presence_metrics
+from label_extraction_core.nutrition_label import NutritionLabelData, evaluate_dataset, nutrition_similarity, presence_metrics
 from image_generation import NutritionLabelGenerator
 from regex_matching import extract_nutrients, easyocr_to_lines, nutrient_aliases
 from deskewing_advanced import DeskewingPipeline, RotationResult
@@ -439,7 +439,8 @@ def main():
         output_dir="test_results",
         dataset_dir="test_dataset",
         use_gpu=USE_GPU,
-        use_deskewing=True
+        use_deskewing=True,
+        deskew_method="hough_lines"
     )
 
     # Run complete pipeline

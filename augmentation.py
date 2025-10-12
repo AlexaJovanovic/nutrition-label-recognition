@@ -166,6 +166,35 @@ def apply_augmentations(img, params: AugmentationParams):
 
     return img
 
+# --- Draw detected text bounding boxes ---
+
+def draw_bounding_boxes(image, results, color=(0, 255, 0), text_color=(75, 250, 55), 
+                        font_scale=2, thickness=2, text_thickness=3):
+    """
+    Draws OCR bounding boxes and recognized text on an image.
+
+    Parameters:
+        image (np.ndarray): The image on which to draw.
+        results (list): List of OCR results, each as (bbox, text, prob).
+        color (tuple): Bounding box color in BGR (default: green).
+        text_color (tuple): Text color in BGR (default: light green).
+        font_scale (float): Font size scale for text.
+        thickness (int): Line thickness for bounding boxes.
+        text_thickness (int): Line thickness for text.
+
+    Returns:
+        np.ndarray: Image with drawn bounding boxes and labels.
+    """
+    annotated = image.copy()
+
+    for (bbox, text, prob) in results:
+        pts = [tuple(map(int, point)) for point in bbox]
+        cv2.polylines(annotated, [np.array(pts, dtype=np.int32)], True, color, thickness)
+        cv2.putText(annotated, text, pts[0], cv2.FONT_HERSHEY_SIMPLEX, 
+                    font_scale, text_color, text_thickness, cv2.LINE_AA)
+    return annotated
+
+
 
 if __name__ == "__main__":
     img = cv2.imread("generated_labels/nutrition_label_0.png")

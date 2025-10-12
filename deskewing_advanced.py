@@ -39,6 +39,7 @@ class DeskewingPipeline:
         """
         self.debug = debug
         self.debug_dir = debug_dir
+        self.img_idx = 0
 
     def preprocess_image(self, image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -53,7 +54,7 @@ class DeskewingPipeline:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         # Apply Gaussian blur to reduce noise
-        blur = cv2.GaussianBlur(gray, (9, 9), 0)
+        blur = cv2.GaussianBlur(gray, (7, 7), 0)
 
         # Adaptive thresholding works better for varying lighting
         thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
@@ -97,13 +98,28 @@ class DeskewingPipeline:
 
         # Get minimum area rectangle
         min_area_rect = cv2.minAreaRect(largest_contour)
-        angle = min_area_rect[-1]
+        center, (width, height), angle = min_area_rect
 
-        # Normalize angle to [-45, 45] range
-        if angle < -45:
-            angle = 90 + angle
-        elif angle > 45:
+        # OpenCV's minAreaRect returns:
+        # - angle in range [-90, 0)
+        # - The rectangle's width is always >= height
+        # - angle is measured from the horizontal to the first side (counterclockwise)
+
+        # The angle represents the rotation of the bounding box
+        # We need to convert this to the image rotation angle
+
+        # If width > height, the box is horizontal-ish, use angle as-is
+        # If height > width, the box is vertical-ish, add 90
+        if width < height:
+            # Swap width/height interpretation
+            angle = angle + 90
+
+        # Now angle should be in range [-90, 90]
+        # Normalize to [-45, 45] for small rotations
+        if angle > 45:
             angle = angle - 90
+        elif angle < -45:
+            angle = angle + 90
 
         # Calculate confidence based on contour quality
         total_area = image.shape[0] * image.shape[1]
@@ -116,11 +132,15 @@ class DeskewingPipeline:
         if self.debug:
             debug_img = image.copy()
             box = cv2.boxPoints(min_area_rect)
-            box = np.int0(box)
+            box = np.int32(box)
             cv2.drawContours(debug_img, [box], 0, (0, 255, 0), 2)
+            # Draw angle text
+            cv2.putText(debug_img, f"Angle: {angle:.1f}deg", (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             cv2.imwrite(f"{self.debug_dir}/contour_result.jpg", debug_img)
 
-        return RotationResult(-angle, confidence, "contour_based")
+        # Return the detected rotation angle (positive = image rotated counterclockwise)
+        return RotationResult(angle, confidence, "contour_based")
 
     def method_hough_lines(self, image: np.ndarray) -> RotationResult:
         """
@@ -136,34 +156,49 @@ class DeskewingPipeline:
         """
         gray, thresh = self.preprocess_image(image)
 
+        # maybe add dilatation to accentuate lines 
+        # kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 1))
+        # edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+
         # Edge detection
         edges = cv2.Canny(thresh, 50, 150, apertureSize=3)
 
         if self.debug:
-            cv2.imwrite(f"{self.debug_dir}/hough_edges.jpg", edges)
+            cv2.imwrite(f"{self.debug_dir}/hough_edges_{self.img_idx}.jpg", edges)
 
         # Detect lines using Hough transform
         lines = cv2.HoughLines(edges, 1, np.pi / 180, threshold=100)
 
         if lines is None or len(lines) == 0:
+            print("No Hugh lines detected")
             return RotationResult(0.0, 0.0, "hough_lines")
+
+        print(lines)
 
         # Calculate angles of all detected lines
         angles = []
         for line in lines:
             rho, theta = line[0]
-            # Convert to degrees and normalize to [-90, 90]
-            angle = np.degrees(theta) - 90
+            # theta is in range [0, pi]
+            # Convert to degrees: theta=0 is vertical, theta=pi/2 is horizontal
+            angle_deg = np.degrees(theta)
+
+            # Convert to rotation angle: 0° = no rotation, positive = counterclockwise
+            # When text lines are horizontal, theta ≈ 90°
+            # When rotated clockwise, theta < 90°
+            # When rotated counterclockwise, theta > 90°
+            rotation_angle = angle_deg - 90
 
             # Focus on near-horizontal lines (within 45 degrees of horizontal)
-            if abs(angle) < 45:
-                angles.append(angle)
+            if abs(rotation_angle) < 45:
+                angles.append(rotation_angle)
 
         if len(angles) == 0:
             return RotationResult(0.0, 0.0, "hough_lines")
 
         # Use median angle (more robust than mean)
-        median_angle = float(np.median(angles))
+        # Negate to get the angle needed to correct the rotation
+        median_angle = -float(np.median(angles))
 
         # Confidence based on consistency of angles
         angle_std = float(np.std(angles))
@@ -180,7 +215,11 @@ class DeskewingPipeline:
                 x2 = int(x0 - 1000 * (-b))
                 y2 = int(y0 - 1000 * (a))
                 cv2.line(debug_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-            cv2.imwrite(f"{self.debug_dir}/hough_lines.jpg", debug_img)
+            cv2.imwrite(f"{self.debug_dir}/hough_lines__{self.img_idx}.jpg", debug_img)
+
+            print(f"Lines_{self.img_idx}", angles)
+
+        self.img_idx = self.img_idx + 1
 
         return RotationResult(median_angle, confidence, "hough_lines")
 
@@ -411,18 +450,257 @@ def compare_methods(image_path: str, save_results: bool = True):
     return results
 
 
+def validate_deskewing(n_samples: int = 50, output_dir: str = "deskew_validation",
+                       save_debug_images: bool = False, verbose: bool = False):
+    """
+    Validate deskewing accuracy by generating images with known rotation angles.
+
+    Args:
+        n_samples: Number of test images to generate
+        output_dir: Directory to save validation results
+        save_debug_images: Whether to save images showing detected angles
+        verbose: Whether to print per-image results
+
+    Returns:
+        Dictionary with validation statistics
+    """
+    import os
+    from image_generation import NutritionLabelGenerator
+    from augmentation import AugmentationParams, apply_augmentations
+
+    print("=" * 80)
+    print("DESKEWING VALIDATION TEST")
+    print("=" * 80)
+    print(f"\nGenerating {n_samples} test images with known rotation angles...")
+
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    if save_debug_images:
+        os.makedirs(os.path.join(output_dir, "debug"), exist_ok=True)
+
+    # Initialize
+    generator = NutritionLabelGenerator(output_dir=output_dir)
+    pipeline = DeskewingPipeline(debug=save_debug_images, debug_dir=os.path.join(output_dir, "debug"))
+
+    # Storage for results
+    results_data = {
+        "true_angles": [],
+        "predictions": {
+            "contour_based": [],
+            "hough_lines": [],
+            "ensemble": []
+        }
+    }
+
+    # Generate and test images
+    for i in range(n_samples):
+        # Generate base label
+        label_data = generator.generate_nutrition_data()
+        base_path = generator.generate_image(label_data, f"test_{i:04d}_base.png")
+        base_img = cv2.imread(base_path)
+
+        # Apply random rotation with known angle
+        true_angle = np.random.uniform(-30, 30)
+
+        # Create augmentation with only rotation
+        augment = AugmentationParams(
+            rotate_angle=true_angle,
+            scale_factor=None,
+            perspective_strength=None,
+            brightness_factor=None,
+            noise_amount=None,
+            gaussian_blur_kernel=None
+        )
+
+        # Random augmentation     
+        augment = AugmentationParams.random()
+        augment.rotate_angle = true_angle
+
+        rotated_img = apply_augmentations(base_img, augment)
+        rotated_path = os.path.join(output_dir, f"test_{i:04d}_rotated.png")
+        cv2.imwrite(rotated_path, rotated_img)
+
+        # Test all deskewing methods
+        results_data["true_angles"].append(true_angle)
+
+        for method in ["contour_based", "hough_lines", "ensemble"]:
+            result = pipeline.detect_rotation(rotated_img, method=method)
+            results_data["predictions"][method].append(result)
+
+        # Verbose output for debugging
+        if verbose and i < 5:  # Show first 5 samples
+            print(f"\nSample {i}:")
+            print(f"  True angle: {true_angle:.2f}°")
+            for method in ["contour_based", "hough_lines", "ensemble"]:
+                pred = results_data["predictions"][method][-1]
+                error = abs(true_angle - pred.angle)
+                print(f"  {method}: {pred.angle:.2f}° (error: {error:.2f}°, conf: {pred.confidence:.2f})")
+
+        # Save debug images
+        if save_debug_images and i < 10:  # Save first 10 samples
+            debug_img = rotated_img.copy()
+            # Add text showing angles
+            cv2.putText(debug_img, f"True: {true_angle:.1f}deg", (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+            ensemble_pred = results_data["predictions"]["ensemble"][-1]
+            cv2.putText(debug_img, f"Pred: {ensemble_pred.angle:.1f}deg", (10, 70),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+            debug_path = os.path.join(output_dir, "debug", f"sample_{i:04d}.png")
+            cv2.imwrite(debug_path, debug_img)
+
+        if (i + 1) % 10 == 0:
+            print(f"Processed {i + 1}/{n_samples} images...")
+
+    print(f"\nAll {n_samples} images processed.")
+    print("\nAnalyzing results...")
+
+    # Calculate statistics for each method
+    stats = {}
+
+    for method in ["contour_based", "hough_lines", "ensemble"]:
+        predictions = results_data["predictions"][method]
+        true_angles = np.array(results_data["true_angles"])
+        pred_angles = np.array([p.angle for p in predictions])
+        confidences = np.array([p.confidence for p in predictions])
+
+        # Calculate errors
+        angle_errors = np.abs(true_angles - pred_angles)
+
+        # Metrics
+        mae = float(np.mean(angle_errors))
+        rmse = float(np.sqrt(np.mean(angle_errors ** 2)))
+        max_error = float(np.max(angle_errors))
+        median_error = float(np.median(angle_errors))
+
+        # Accuracy at different thresholds
+        acc_1deg = float(np.mean(angle_errors < 1.0))
+        acc_2deg = float(np.mean(angle_errors < 2.0))
+        acc_5deg = float(np.mean(angle_errors < 5.0))
+
+        avg_confidence = float(np.mean(confidences))
+
+        stats[method] = {
+            "mae": mae,
+            "rmse": rmse,
+            "max_error": max_error,
+            "median_error": median_error,
+            "accuracy_1deg": acc_1deg,
+            "accuracy_2deg": acc_2deg,
+            "accuracy_5deg": acc_5deg,
+            "avg_confidence": avg_confidence,
+            "predictions": predictions,
+            "true_angles": true_angles,
+            "pred_angles": pred_angles,
+            "errors": angle_errors
+        }
+
+    # Generate report
+    report = generate_validation_report(stats, n_samples)
+
+    # Save report
+    report_path = os.path.join(output_dir, "validation_report.txt")
+    with open(report_path, 'w') as f:
+        f.write(report)
+
+    print("\n" + report)
+    print(f"\nValidation results saved to: {output_dir}")
+    print(f"Report saved to: {report_path}")
+
+    return stats
+
+
+def generate_validation_report(stats: dict, n_samples: int) -> str:
+    """Generate a text report for deskewing validation."""
+    report = []
+    report.append("=" * 80)
+    report.append("DESKEWING VALIDATION REPORT")
+    report.append("=" * 80)
+    report.append(f"\nTest Dataset: {n_samples} images with random rotations (-45° to 45°)")
+    report.append("")
+
+    # Compare methods
+    methods = ["contour_based", "hough_lines", "ensemble"]
+
+    for method in methods:
+        s = stats[method]
+        report.append("-" * 80)
+        report.append(f"METHOD: {method.upper().replace('_', ' ')}")
+        report.append("-" * 80)
+        report.append(f"Mean Absolute Error (MAE):     {s['mae']:.2f}°")
+        report.append(f"Root Mean Square Error (RMSE): {s['rmse']:.2f}°")
+        report.append(f"Median Error:                  {s['median_error']:.2f}°")
+        report.append(f"Maximum Error:                 {s['max_error']:.2f}°")
+        report.append("")
+        report.append("Accuracy (% within threshold):")
+        report.append(f"  ±1°:  {s['accuracy_1deg']*100:.1f}%")
+        report.append(f"  ±2°:  {s['accuracy_2deg']*100:.1f}%")
+        report.append(f"  ±5°:  {s['accuracy_5deg']*100:.1f}%")
+        report.append("")
+        report.append(f"Average Confidence: {s['avg_confidence']:.2f}")
+        report.append("")
+
+    # Comparison summary
+    report.append("=" * 80)
+    report.append("COMPARISON SUMMARY")
+    report.append("=" * 80)
+    report.append(f"{'Method':<20} {'MAE':<10} {'RMSE':<10} {'Acc@±2°':<12} {'Confidence':<12}")
+    report.append("-" * 80)
+
+    for method in methods:
+        s = stats[method]
+        report.append(
+            f"{method:<20} "
+            f"{s['mae']:<10.2f} "
+            f"{s['rmse']:<10.2f} "
+            f"{s['accuracy_2deg']*100:<12.1f} "
+            f"{s['avg_confidence']:<12.2f}"
+        )
+
+    # Best method
+    report.append("")
+    best_method = min(methods, key=lambda m: stats[m]['mae'])
+    report.append(f"Best Method (by MAE): {best_method.upper().replace('_', ' ')}")
+    report.append("")
+    report.append("=" * 80)
+
+    return "\n".join(report)
+
+
 if __name__ == "__main__":
     # Example usage
     import sys
 
     if len(sys.argv) > 1:
-        image_path = sys.argv[1]
+        if sys.argv[1] == "--validate":
+            # Run validation test
+            n_samples = 50
+            verbose = False
+            debug = False
+
+            # Parse additional arguments
+            for arg in sys.argv[2:]:
+                if arg.isdigit():
+                    n_samples = int(arg)
+                elif arg == "--verbose":
+                    verbose = True
+                elif arg == "--debug":
+                    debug = True
+
+            validate_deskewing(n_samples=n_samples,
+                             save_debug_images=debug,
+                             verbose=verbose)
+        else:
+            # Compare methods on single image
+            image_path = sys.argv[1]
+            print("Advanced Deskewing Pipeline")
+            print("=" * 80)
+            results = compare_methods(image_path)
     else:
-        # Default test image
-        image_path = "generated_labels/label_rot15.png"
-
-    print("Advanced Deskewing Pipeline")
-    print("=" * 80)
-
-    # Compare methods
-    results = compare_methods(image_path)
+        # Default: run validation with verbose mode
+        print("Running deskewing validation test...")
+        print("(Use: python deskewing_advanced.py <image_path> to test single image)")
+        print("(Use: python deskewing_advanced.py --validate [n_samples] [--verbose] [--debug] for validation)")
+        print("")
+        validate_deskewing(n_samples=50, verbose=True, save_debug_images=True)

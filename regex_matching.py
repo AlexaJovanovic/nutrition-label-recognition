@@ -1,4 +1,4 @@
-from nutrition_label import NutritionLabelData
+from label_extraction_core.nutrition_label import NutritionLabelData
 
 nutrient_aliases = {
     "calories": ["calories", "energy", "energie", "energía", "kalorien", "kalorije", "energetska vrednost", "energija", "енергетска вредност"],
