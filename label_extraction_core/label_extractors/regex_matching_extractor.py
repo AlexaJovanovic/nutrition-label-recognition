@@ -6,8 +6,12 @@ from label_extraction_core.nutrition_label import NutritionLabelData
 from .base_extractor import nutrient_aliases
 
 class RegexMatchingExtractor(AbstractLabelExtractor):
-    def _extract_from_ocr_results(self, ocr_results):
-        lines = [text for _, text, _ in ocr_results]
+    def __init__(self,  debug=False):
+        # Call superclass constructor
+        super().__init__(debug)
+
+    
+    def _extract_nutrition_data(self, lines):
         nutrients = {}
 
         for line in lines:

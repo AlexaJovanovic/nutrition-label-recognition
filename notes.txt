@@ -22,3 +22,23 @@ https://livefiredev.com/how-to-extract-table-from-image-in-python-opencv-ocr/
 https://github.com/wjbmattingly/ocr_python_textbook
 https://www.youtube.com/watch?v=ADV-AjAXHdc&list=PL2VXyKi-KpYuTAZz__9KVl1jQz74bDG7i&index=4
 https://becominghuman.ai/how-to-automatically-deskew-straighten-a-text-image-using-opencv-a0c30aed83df
+
+
+-- Rapid Fuzz and Levenshtein distance
+
+RapidFuzz documentation (official)
+
+"All ratios are based on Levenshtein distance with different normalization or matching strategies."
+RapidFuzz documentation – fuzz.ratio
+
+Myers, G. (1999).
+A Fast Bit-Vector Algorithm for Approximate String Matching Based on Dynamic Programming.
+Journal of the ACM (JACM), 46(3), 395–415.
+— The underlying algorithm RapidFuzz uses for efficient Levenshtein computation.
+
+Cohen, W. W., Ravikumar, P., & Fienberg, S. E. (2003).
+A Comparison of String Distance Metrics for Name-Matching Tasks.
+In IIWeb Workshop on Information Integration on the Web.
+
+-- Huough transform
+Learning OpenCV by Bradski and Kaehler 

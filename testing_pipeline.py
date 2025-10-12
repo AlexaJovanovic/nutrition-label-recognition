@@ -3,7 +3,7 @@ Complete Testing Pipeline for Nutrition Label OCR System
 
 This module provides an end-to-end testing pipeline that:
 1. Generates a synthetic dataset of nutrition labels with known ground truth
-2. Runs OCR and regex-based extraction on each image
+2. Runs extraction on each image with provided model
 3. Evaluates predictions against ground truth using multiple metrics
 4. Generates detailed reports and visualizations
 """
@@ -31,6 +31,9 @@ from image_generation import NutritionLabelGenerator
 from regex_matching import extract_nutrients, easyocr_to_lines, nutrient_aliases
 from deskewing_advanced import DeskewingPipeline, RotationResult
 
+from label_extraction_core.label_extractors import AbstractLabelExtractor
+from label_extraction_core.label_extractors import RegexMatchingExtractor
+from label_extraction_core.label_extractors import LevenshteinMatchingExtractor
 
 class TestingPipeline:
     """
@@ -39,6 +42,7 @@ class TestingPipeline:
 
     def __init__(
         self,
+        extractor: AbstractLabelExtractor,
         output_dir: str = "test_results",
         dataset_dir: str = "test_dataset",
         use_gpu: bool = False,
@@ -50,6 +54,7 @@ class TestingPipeline:
         Initialize the testing pipeline.
 
         Args:
+            extractor: Algorithm for label extraction that does the prediction
             output_dir: Directory to save test results and reports
             dataset_dir: Directory to save generated test dataset
             use_gpu: Whether to use GPU for OCR (if available)
@@ -57,6 +62,8 @@ class TestingPipeline:
             deskew_method: Deskewing method ("contour_based", "hough_lines", "ensemble")
             deskew_confidence_threshold: Minimum confidence to apply rotation correction
         """
+
+        self.extractor = extractor
         self.output_dir = output_dir
         self.dataset_dir = dataset_dir
         self.use_gpu = use_gpu
@@ -67,11 +74,6 @@ class TestingPipeline:
         # Create directories
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(dataset_dir, exist_ok=True)
-
-        # Initialize OCR reader
-        print("Initializing OCR reader...")
-        self.reader = easyocr.Reader(['en'], gpu=use_gpu)
-        print("OCR reader initialized.")
 
         # Initialize deskewing pipeline if enabled
         if self.use_deskewing:
@@ -87,6 +89,7 @@ class TestingPipeline:
         self.image_paths: List[str] = []
         self.ocr_times: List[float] = []
         self.extraction_times: List[float] = []
+        self.inference_times: List[float] = []
         self.rotation_results: List[Optional[RotationResult]] = []
 
     def generate_dataset(self, n_samples: int = 50) -> List[Tuple[str, NutritionLabelData]]:
@@ -109,51 +112,6 @@ class TestingPipeline:
         print(f"Dataset generated: {len(processed_dataset)} images in '{self.dataset_dir}'")
         return processed_dataset
 
-    def run_ocr(self, image_path: str) -> Tuple[List, float, Optional[RotationResult]]:
-        """
-        Run OCR on a single image, with optional deskewing.
-
-        Args:
-            image_path: Path to the image
-
-        Returns:
-            Tuple of (ocr_results, processing_time_seconds, rotation_result)
-        """
-        # Load image
-        image = cv2.imread(image_path)
-        rotation_result = None
-
-        # Apply deskewing if enabled
-        if self.use_deskewing and self.deskewer is not None:
-            image, rotation_result = self.deskewer.deskew(
-                image,
-                method=self.deskew_method,
-                confidence_threshold=self.deskew_confidence_threshold
-            )
-
-        # Run OCR
-        start_time = time.time()
-        results = self.reader.readtext(image)
-        elapsed = time.time() - start_time
-
-        return results, elapsed, rotation_result
-
-    def extract_prediction(self, ocr_results: List) -> Tuple[NutritionLabelData, float]:
-        """
-        Extract nutrition data from OCR results using regex matching.
-
-        Args:
-            ocr_results: Raw OCR output from EasyOCR
-
-        Returns:
-            Tuple of (predicted_label, processing_time_seconds)
-        """
-        start_time = time.time()
-        lines = easyocr_to_lines(ocr_results)
-        prediction = extract_nutrients(lines, nutrient_aliases)
-        elapsed = time.time() - start_time
-        return prediction, elapsed
-
     def run_predictions(self, dataset: List[Tuple[str, NutritionLabelData]]):
         """
         Run predictions on the entire dataset.
@@ -171,21 +129,31 @@ class TestingPipeline:
         self.rotation_results = []
 
         for img_path, true_label in tqdm(dataset, desc="Processing images"):
-            # Run OCR (with optional deskewing)
-            ocr_results, ocr_time, rotation_result = self.run_ocr(img_path)
+            # Load image
+            image = cv2.imread(img_path)
+            rotation_result = None
 
-            # Extract nutrients
-            pred_label, extraction_time = self.extract_prediction(ocr_results)
+            # Apply deskewing if enabled
+            if self.use_deskewing and self.deskewer is not None:
+                image, rotation_result = self.deskewer.deskew(
+                    image,
+                    method=self.deskew_method,
+                    confidence_threshold=self.deskew_confidence_threshold
+                )
+
+            # Run prediction
+            start_time = time.time()
+            pred_label, ocr_results = self.extractor.predict_from_image(image)
+            inference_time = time.time() - start_time
 
             # Store results
             self.ground_truth.append(true_label)
             self.predictions.append(pred_label)
             self.image_paths.append(img_path)
-            self.ocr_times.append(ocr_time)
-            self.extraction_times.append(extraction_time)
+            self.inference_times.append(inference_time)
             self.rotation_results.append(rotation_result)
 
-        print(f"Predictions complete. Avg OCR time: {np.mean(self.ocr_times):.3f}s")
+        print(f"Predictions complete. Avg inference time: {np.mean(self.inference_times):.3f}s")
 
     def evaluate(self) -> Dict:
         """
@@ -212,10 +180,8 @@ class TestingPipeline:
 
         # Performance metrics
         performance_metrics = {
-            "avg_ocr_time": float(np.mean(self.ocr_times)),
-            "avg_extraction_time": float(np.mean(self.extraction_times)),
-            "total_time": float(sum(self.ocr_times) + sum(self.extraction_times)),
-            "avg_total_time_per_image": float(np.mean([o + e for o, e in zip(self.ocr_times, self.extraction_times)]))
+            "avg_inference_time": float(np.mean(self.inference_times)),
+            "total_time": float(sum(self.inference_times)),
         }
 
         # Deskewing statistics (if enabled)
@@ -291,9 +257,7 @@ class TestingPipeline:
         report.append("PERFORMANCE METRICS")
         report.append("-" * 80)
         perf = results['performance']
-        report.append(f"Average OCR Time:        {perf['avg_ocr_time']:.3f}s")
-        report.append(f"Average Extraction Time: {perf['avg_extraction_time']:.3f}s")
-        report.append(f"Average Total Time:      {perf['avg_total_time_per_image']:.3f}s per image")
+        report.append(f"Average Inference Time:       {perf['avg_inference_time']:.3f}s")
         report.append(f"Total Processing Time:   {perf['total_time']:.2f}s")
         report.append("")
 
@@ -436,7 +400,8 @@ def main():
 
     # Initialize and run pipeline
     pipeline = TestingPipeline(
-        output_dir="test_results",
+        extractor=LevenshteinMatchingExtractor(),
+        output_dir="test_results_lme",
         dataset_dir="test_dataset",
         use_gpu=USE_GPU,
         use_deskewing=True,

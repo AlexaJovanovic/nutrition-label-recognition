@@ -1,10 +1,11 @@
+# label_extractors/base_extractor.py
+
 import easyocr
 from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple, Any
 import numpy as np
 import cv2
 from label_extraction_core.nutrition_label import NutritionLabelData
-from image_preprocessor import ImagePreprocessor
 
 
 def pretty_print_easyocr(results):  
@@ -24,13 +25,13 @@ def pretty_print_easyocr(results):
         print(f"{i:<6} {bbox_str:<45} {text:<20} {conf:.6f}")
 
 nutrient_aliases = {
-    "calories": ["calories", "energy", "energie", "energía", "kalorien", "kalorije", "energetska vrednost", "energija", "енергетска вредност"],
-    "fat": ["fat", "fett", "grasas", "lipides", "masti"],
-    "saturated_fat": ["saturated fat", "saturates", "gesättigte", "saturadas", "zasićene", "засићене"],
-    "carbohydrates": ["carbohydrate", "carbs", "kohlenhydrate", "glucides", "ugljeni hidrati", "угљени хидрати"],
-    "sugar": ["sugar", "zucker", "azúcares", "sucre", "sećeri", "шећери"],
-    "fiber": ["fiber", "fibre", "ballaststoffe", "vlakna", "влакна"],
-    "protein": ["protein", "eiweiß", "proteínas", "protéine", "proteini", "протеини"]
+    "calories": ["calories", "energy", "kalorije", "energetska vrednost", "energija", "енергетска вредност"],
+    "fat": ["Total fat", "fett",  "masti", "масти"],
+    "saturated_fat": ["saturated fat", "saturates", "zasićene", "засићене"],
+    "carbohydrates": ["carbohydrate", "carbs", "ugljeni hidrati", "угљени хидрати"],
+    "sugar": ["sugar", "sucre", "sećeri", "шећери"],
+    "fiber": ["fiber", "vlakna", "влакна"],
+    "protein": ["protein", "proteini", "протеини"]
 }
 
 class AbstractLabelExtractor(ABC):
@@ -40,33 +41,37 @@ class AbstractLabelExtractor(ABC):
     to subclasses.
     """
 
-    def __init__(self, preprocessor: Optional[ImagePreprocessor] = None):
-        self.preprocessor: Optional[ImagePreprocessor] = preprocessor
-        self.reader: easyocr.Reader = easyocr.Reader(['en', 'rs_cyrillic', 'rs_latin'], gpu=False)
+    def __init__(self, debug: bool = False):
+        self.debug = debug
+        self.reader: easyocr.Reader = easyocr.Reader(['en', 'rs_latin'], gpu=False)
 
-    def predict_from_image(self, image: np.ndarray) -> NutritionLabelData:
+    def predict_from_image(self, image: np.ndarray) -> Tuple[NutritionLabelData, List[Tuple[List[Tuple[int, int]], str, float]]]:
         """
         Runs preprocessing (if provided), OCR extraction, line reconstruction,
         and delegates nutrition data parsing to the subclass.
+
+        Returns:
+            A tuple of (nutrition_data, ocr_output)
         """
         if not isinstance(image, np.ndarray):
             raise TypeError("Input must be a numpy ndarray.")
 
-        # Step 1: optional preprocessing
-        processed: np.ndarray = (
-            self.preprocessor.preprocess(image)
-            if self.preprocessor is not None
-            else image
-        )
-
         # Step 2: OCR text extraction
-        ocr_output: List[Tuple[List[Tuple[int, int]], str, float]] = self.reader.readtext(processed)
+        ocr_output: List[Tuple[List[Tuple[int, int]], str, float]] = self.reader.readtext(image)
 
         # Step 3: Convert OCR output to structured line text
         lines: List[str] = self._easyocr_to_lines(ocr_output)
 
+        if self.debug:
+            pretty_print_easyocr(ocr_output)
+            print("Lines of text:", lines)
+
         # Step 4: Delegate to subclass for actual data extraction
-        return self._extract_nutrition_data(lines)
+        nutrition_data = self._extract_nutrition_data(lines)
+
+        # Return both the nutrition data and the OCR output
+        return nutrition_data, ocr_output
+
 
     @abstractmethod
     def _extract_nutrition_data(self, lines: List[str]) -> NutritionLabelData:
